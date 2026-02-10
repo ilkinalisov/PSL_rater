@@ -1,5 +1,7 @@
 import React, { useMemo, useState } from 'react';
 
+const MIN_CONTOUR_CONFIDENCE = 0.45;
+
 // PART B3: Overlay toggle for original vs analyzed image.
 const OverlayViewer = ({ title, originalSrc, overlayData, contours }) => {
   const [mode, setMode] = useState('analysis');
@@ -36,8 +38,12 @@ const OverlayViewer = ({ title, originalSrc, overlayData, contours }) => {
   if (!overlaySrc && !originalSrc) return null;
 
   const displayed = mode === 'analysis' ? (overlaySrc || originalSrc) : (originalSrc || overlaySrc);
+  const contourMethod = String(normalizedContours?.method || '').toLowerCase();
+  const isFallbackMethod = contourMethod.includes('fallback');
   const canDrawContours =
     normalizedContours &&
+    !isFallbackMethod &&
+    normalizedContours.confidence >= MIN_CONTOUR_CONFIDENCE &&
     normalizedContours.width > 0 &&
     normalizedContours.height > 0 &&
     (normalizedContours.silhouette.length >= 2 || normalizedContours.jawRamus.length >= 2);
