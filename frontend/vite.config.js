@@ -6,6 +6,7 @@ export default defineConfig(({ mode }) => {
   const proxyTarget = env.VITE_PROXY_TARGET || env.REACT_APP_PROXY_TARGET || 'http://localhost:8000';
 
   return {
+    envPrefix: ['VITE_', 'REACT_APP_'],
     plugins: [react()],
     server: {
       host: '0.0.0.0',
