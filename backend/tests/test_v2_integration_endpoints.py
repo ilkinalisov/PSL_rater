@@ -69,6 +69,19 @@ class TestV2Endpoints(unittest.TestCase):
                         },
                         "overlay_source": "v2_landmarks_renderer",
                     },
+                    "contours": {
+                        "method": "edge_trace_dijkstra_v1",
+                        "confidence": 0.72,
+                        "silhouette": [{"x": 30, "y": 20}, {"x": 45, "y": 40}],
+                        "jaw_ramus": [{"x": 65, "y": 145}, {"x": 100, "y": 120}],
+                        "debug": {
+                            "image_size": {"width": 120, "height": 160},
+                            "was_mirrored": False,
+                            "processing_mode": "color",
+                            "roi": {"x1": 10, "y1": 10, "x2": 110, "y2": 150},
+                            "fallback_reason": "none",
+                        },
+                    },
                     "quality_v2": {
                         "pose_yaw": 82.0,
                         "occlusion_score": 0.8,
@@ -103,6 +116,10 @@ class TestV2Endpoints(unittest.TestCase):
         body = response.json()
         self.assertTrue(body.get("success"))
         self.assertIn("landmarks_v2", body["side_analysis"])
+        self.assertIn("contours", body["side_analysis"])
+        self.assertIn("method", body["side_analysis"]["contours"])
+        self.assertIn("silhouette", body["side_analysis"]["contours"])
+        self.assertIn("jaw_ramus", body["side_analysis"]["contours"])
         self.assertIn("method_source", body["side_analysis"]["landmarks_v2"])
         self.assertIn("gonial_debug", body["side_analysis"]["landmarks_v2"])
         self.assertIn("pitch_deg", body["side_analysis"]["landmarks_v2"]["gonial_debug"])
@@ -132,6 +149,7 @@ class TestV2Endpoints(unittest.TestCase):
         body = response.json()
         self.assertTrue(body.get("success"))
         self.assertIn("scores_v2", body)
+        self.assertIn("contours", body["side_analysis"])
         self.assertIn("method_source", body["side_analysis"])
         self.assertIn("pipeline", body["debug"])
         self.assertIn("endpoint_variant", body["debug"]["pipeline"])

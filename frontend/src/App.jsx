@@ -199,6 +199,7 @@ function App() {
                 title="Side Overlay"
                 originalSrc={sidePreview}
                 overlayData={results.overlays?.side}
+                contours={results.side_analysis?.contours}
               />
             </article>
           </section>

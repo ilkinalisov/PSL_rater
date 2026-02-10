@@ -12,6 +12,7 @@ from typing import Dict, Tuple
 import numpy as np
 
 from v2.geometry import check_landmark_invariants, gonial_angle_from_points
+from v2.edge_contour_tracer import trace_side_contours
 from v2.jawline_solver import solve_jawline_contour
 from v2.overlay_renderer import OVERLAY_RENDERER_VERSION, render_side_overlay
 
@@ -276,6 +277,15 @@ class ThreeDDFAEngine:
             gonial_debug.setdefault("overlay_path_quality", 0.0)
             gonial_debug.setdefault("ramus_display_mode", "straight_fallback")
         landmarks["overlay_source"] = overlay_source
+
+        contours = trace_side_contours(
+            image=image,
+            anchor_points=(result.get("landmarks_v2") or {}).get("points") or points,
+            jaw_solver_debug=jaw.debug if isinstance(jaw.debug, dict) else {},
+            was_mirrored=bool((result.get("measurements") or {}).get("was_mirrored", False)),
+        )
+        landmarks["contours"] = contours
+        result["contours"] = contours
 
         result.setdefault("debug", {})
         result["debug"]["remote_engine"] = {

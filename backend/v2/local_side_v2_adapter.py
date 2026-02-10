@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 
 from .calibration.calibrator import LandmarkCalibrator
+from .edge_contour_tracer import trace_side_contours
 from .geometry import (
     build_default_jaw_contour,
     check_landmark_invariants,
@@ -419,11 +420,19 @@ class LocalSideV2Adapter:
             gonial_debug.setdefault("overlay_path_quality", 0.0)
             gonial_debug.setdefault("ramus_display_mode", "straight_fallback")
 
+        contours = trace_side_contours(
+            image=image,
+            anchor_points=points,
+            jaw_solver_debug=jawline_result.debug if jawline_result is not None else None,
+            was_mirrored=bool(m.get("was_mirrored", False)),
+        )
+
         return {
             "score": float(side_score),
             "breakdown": side_breakdown,
             "measurements": m,
             "overlay_image": overlay_image,
+            "contours": contours,
             "debug": {
                 **debug,
                 "v2_diagnostics": {
@@ -451,6 +460,7 @@ class LocalSideV2Adapter:
                 "engine": "local_fallback_mp_hybrid",
                 "method_source": method_source,
                 "overlay_source": overlay_source,
+                "contours": contours,
             },
             "quality_v2": {
                 "pose_yaw": quality["pose_yaw"],

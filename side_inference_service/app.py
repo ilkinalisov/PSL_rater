@@ -96,6 +96,7 @@ async def infer_side(image: UploadFile = File(...)):
             "breakdown": result.get("breakdown"),
             "measurements": result.get("measurements"),
             "landmarks_v2": result.get("landmarks_v2"),
+            "contours": result.get("contours"),
             "quality_v2": result.get("quality_v2"),
             "debug": result.get("debug"),
             "overlay_image": overlay_b64,

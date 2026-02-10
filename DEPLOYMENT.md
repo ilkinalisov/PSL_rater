@@ -56,4 +56,4 @@ This project can be deployed cheaply and securely with:
 ## Notes
 - Render free tier has cold starts (can be ~20-30 seconds after idle).
 - Railway hobby plan (~$5/mo) reduces/eliminates cold-start delays.
-- `/v2/analyze/side` and `/v2/analyze/pair` are now available with `landmarks_v2`, `quality_v2`, and `scores_v2`.
+- `/v2/analyze/side` and `/v2/analyze/pair` are now available with `landmarks_v2`, `quality_v2`, `scores_v2`, and edge-traced `contours` (`silhouette`, `jaw_ramus`) for frontend polyline rendering.

@@ -33,12 +33,14 @@ from facial_analysis import EnhancedFacialAnalyzer
 from side_profile_analyzer import SideProfileAnalyzer
 try:
     from v2.calibration.calibrator import LandmarkCalibrator
+    from v2.edge_contour_tracer import trace_side_contours
     from v2.local_side_v2_adapter import LocalSideV2Adapter
     from v2.overlay_renderer import OVERLAY_RENDERER_VERSION
     from v2.scoring import compute_front_reliability, compute_scores_v2
     from v2.side_inference_client import SideInferenceClient, compare_side_v1_v2
 except ImportError:  # pragma: no cover - supports package-style imports in tests/tools.
     from backend.v2.calibration.calibrator import LandmarkCalibrator
+    from backend.v2.edge_contour_tracer import trace_side_contours
     from backend.v2.local_side_v2_adapter import LocalSideV2Adapter
     from backend.v2.overlay_renderer import OVERLAY_RENDERER_VERSION
     from backend.v2.scoring import compute_front_reliability, compute_scores_v2
@@ -276,6 +278,51 @@ def _run_side_v2(image: np.ndarray) -> Dict:
     return result
 
 
+def _extract_anchor_points_from_debug(side_debug: Dict) -> Dict:
+    anchors = {}
+    points = (side_debug or {}).get("landmark_points", {}) or {}
+    for key in (
+        "trichion",
+        "glabella",
+        "nasion",
+        "pronasale",
+        "subnasale",
+        "menton",
+        "gonion",
+        "articulare",
+        "tragion",
+        "pogonion",
+    ):
+        val = points.get(key)
+        if isinstance(val, (list, tuple)) and len(val) >= 2:
+            anchors[key] = (int(val[0]), int(val[1]))
+    return anchors
+
+
+def _build_legacy_contours(image: np.ndarray, side_debug: Dict, measurements) -> Dict:
+    anchors = _extract_anchor_points_from_debug(side_debug or {})
+    if not anchors:
+        return {
+            "method": "landmark_fallback_v1",
+            "confidence": 0.0,
+            "silhouette": [],
+            "jaw_ramus": [],
+            "debug": {
+                "image_size": {"width": int(image.shape[1]), "height": int(image.shape[0])},
+                "was_mirrored": bool(getattr(measurements, "was_mirrored", False)),
+                "processing_mode": "color",
+                "roi": None,
+                "fallback_reason": "missing_anchors",
+            },
+        }
+    return trace_side_contours(
+        image=image,
+        anchor_points=anchors,
+        jaw_solver_debug=(side_debug or {}).get("v2_diagnostics", {}).get("jawline_solver", {}),
+        was_mirrored=bool(getattr(measurements, "was_mirrored", False)),
+    )
+
+
 def _normalize_v2_side_payload(v2_result: Dict) -> Dict:
     """
     Normalize local/remote V2 shape into endpoint-ready fields.
@@ -318,6 +365,20 @@ def _normalize_v2_side_payload(v2_result: Dict) -> Dict:
 
     landmarks_v2.setdefault("points", {})
     landmarks_v2.setdefault("jaw_contour", [])
+    contours = v2_result.get("contours") or landmarks_v2.get("contours") or {
+        "method": "landmark_fallback_v1",
+        "confidence": 0.0,
+        "silhouette": [],
+        "jaw_ramus": [],
+        "debug": {
+            "image_size": {"width": 0, "height": 0},
+            "was_mirrored": False,
+            "processing_mode": "color",
+            "roi": None,
+            "fallback_reason": "missing_contours",
+        },
+    }
+    landmarks_v2.setdefault("contours", contours)
     landmarks_v2.setdefault("method", "local_legacy_mp_hybrid")
     landmarks_v2.setdefault("method_source", v2_result.get("method_source", transport.get("source", "local_fallback_legacy")))
     landmarks_v2.setdefault("overlay_source", "unknown")
@@ -347,6 +408,7 @@ def _normalize_v2_side_payload(v2_result: Dict) -> Dict:
         "breakdown": side_breakdown,
         "measurements": measurements,
         "landmarks_v2": landmarks_v2,
+        "contours": contours,
         "quality_v2": quality_v2,
         "overlay_base64": overlay_base64,
         "transport": transport,
@@ -507,6 +569,7 @@ async def analyze_pair(
         side_measurements, side_overlay, side_debug = side_analyzer.analyze_side_profile(side_img)
         if side_measurements is None:
             raise HTTPException(status_code=400, detail="No face in side image")
+        side_contours = _build_legacy_contours(side_img, side_debug, side_measurements)
         
         # Calculate scores
         front_psl, front_breakdown = front_analyzer.calculate_psl_score(front_measurements)
@@ -571,6 +634,7 @@ async def analyze_pair(
                 "interpretation": get_psl_interpretation(side_psl),
                 "breakdown": side_breakdown,
                 "measurements": measurements_to_dict(side_measurements),
+                "contours": side_contours,
                 "was_mirrored": getattr(side_measurements, 'was_mirrored', False),
                 "is_estimated": getattr(side_measurements, 'is_estimated', False),
                 "gender": {
@@ -670,6 +734,7 @@ async def analyze_side(
             raise HTTPException(status_code=400, detail="No face detected")
         
         side_score, score_breakdown = side_analyzer.calculate_side_profile_score(measurements)
+        side_contours = _build_legacy_contours(image, debug_info, measurements)
         shadow_debug = None
         if ENABLE_V2_SHADOW:
             try:
@@ -704,6 +769,7 @@ async def analyze_side(
                 "confidence": float(getattr(measurements, "gender_confidence", 0.0))
             },
             "measurements": measurements_to_dict(measurements),
+            "contours": side_contours,
             "overlay": overlay_base64,
             "debug": {
                 **(debug_info or {}),
@@ -765,6 +831,7 @@ async def analyze_side_v2(
                 "breakdown": v2["breakdown"],
                 "measurements": side_measurements,
                 "landmarks_v2": v2["landmarks_v2"],
+                "contours": v2["contours"],
                 "quality_v2": v2["quality_v2"],
                 "method_source": v2.get("method_source", "local_fallback_legacy"),
                 "transport": v2["transport"],
@@ -883,6 +950,7 @@ async def analyze_pair_v2(
                 "breakdown": v2["breakdown"],
                 "measurements": v2["measurements"],
                 "landmarks_v2": v2["landmarks_v2"],
+                "contours": v2["contours"],
                 "quality_v2": v2["quality_v2"],
                 "method_source": v2.get("method_source", "local_fallback_legacy"),
                 "transport": v2["transport"],
