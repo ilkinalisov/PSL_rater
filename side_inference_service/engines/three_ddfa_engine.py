@@ -259,13 +259,26 @@ class ThreeDDFAEngine:
 
         # Ensure overlay matches finalized landmarks (post-fusion points).
         overlay_source = "v2_landmarks_renderer"
+        overlay_jaw_contour = (result.get("landmarks_v2") or {}).get("jaw_contour") or []
+        safe_overlay_mode = (
+            (not accepted) or
+            bool(gonial_debug.get("fallback_reason") not in (None, "none")) or
+            (processing_mode == "mono" and monochrome_score >= 0.72)
+        )
+        if safe_overlay_mode:
+            safe_contour = []
+            points_for_safe = (result.get("landmarks_v2") or {}).get("points") or points
+            for key in ("menton", "gonion", "articulare"):
+                val = points_for_safe.get(key)
+                if isinstance(val, (list, tuple)) and len(val) >= 2:
+                    safe_contour.append([int(val[0]), int(val[1])])
+            overlay_jaw_contour = safe_contour if len(safe_contour) >= 2 else []
         try:
             points_map = (result.get("landmarks_v2") or {}).get("points") or {}
-            jaw_contour = (result.get("landmarks_v2") or {}).get("jaw_contour") or []
             result["overlay_image"] = render_side_overlay(
                 image.copy(),
                 points_map,
-                jaw_contour,
+                overlay_jaw_contour,
                 gonial_debug=gonial_debug,
                 processing_mode=processing_mode,
                 monochrome_score=monochrome_score,

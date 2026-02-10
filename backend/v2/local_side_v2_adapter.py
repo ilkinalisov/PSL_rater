@@ -404,11 +404,23 @@ class LocalSideV2Adapter:
         method_source = "local_fallback_legacy"
         overlay_source = "v2_landmarks_renderer"
         overlay_image = overlay
+        overlay_jaw_contour = jaw_contour
+        safe_overlay_mode = (
+            (not jawline_accepted) or
+            bool(gonial_debug.get("fallback_reason") not in (None, "none")) or
+            (processing_mode == "mono" and monochrome_score >= 0.72)
+        )
+        if safe_overlay_mode:
+            safe_contour = []
+            for key in ("menton", "gonion", "articulare"):
+                if key in points:
+                    safe_contour.append([int(points[key][0]), int(points[key][1])])
+            overlay_jaw_contour = safe_contour if len(safe_contour) >= 2 else build_default_jaw_contour(points)
         try:
             overlay_image = render_side_overlay(
                 image.copy(),
                 points,
-                jaw_contour,
+                overlay_jaw_contour,
                 gonial_debug=gonial_debug,
                 processing_mode=processing_mode,
                 monochrome_score=monochrome_score,

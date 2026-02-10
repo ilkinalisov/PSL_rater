@@ -534,6 +534,22 @@ def trace_side_contours(
         fallback_reason = "low_texture"
 
     processing_mode = str((jaw_solver_debug or {}).get("processing_mode", "color"))
+    # Conservative quality gate: use edge-traced freedom only when segment solving quality is high.
+    quality_gate_pass = (
+        method == "edge_trace_dijkstra_v1" and
+        completion >= 0.67 and
+        avg_snap <= 6.5 and
+        confidence >= 0.52 and
+        not (processing_mode == "mono" and edge_density < 0.085)
+    )
+
+    if not quality_gate_pass:
+        method = "landmark_fallback_v1"
+        confidence = min(confidence, 0.30)
+        if fallback_reason == "none":
+            fallback_reason = "quality_gate"
+        silhouette = _fallback_polyline(points, silhouette_keys)
+        jaw_ramus = _fallback_polyline(points, jaw_keys)
 
     return {
         "method": method,
@@ -554,5 +570,6 @@ def trace_side_contours(
             "edge_density": round(edge_density, 4),
             "segment_completion": round(completion, 3),
             "avg_anchor_snap": round(avg_snap, 3),
+            "quality_gate_pass": bool(quality_gate_pass),
         },
     }
