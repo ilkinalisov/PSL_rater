@@ -128,7 +128,9 @@ class ThreeDDFAEngine:
         self._set_method_defaults(result)
 
         points = self._read_points(result)
-        jaw = solve_jawline_contour(image, points)
+        was_mirrored = bool((result.get("measurements") or {}).get("was_mirrored", False))
+        working_image = np.fliplr(image).copy() if was_mirrored else image
+        jaw = solve_jawline_contour(working_image, points)
         visibility = float(np.clip(jaw.visibility_score, 0.0, 1.0))
         processing_mode = str((jaw.debug or {}).get("processing_mode", "color"))
         monochrome_score = float(np.clip((jaw.debug or {}).get("monochrome_score", 0.0), 0.0, 1.0))
@@ -276,7 +278,7 @@ class ThreeDDFAEngine:
         try:
             points_map = (result.get("landmarks_v2") or {}).get("points") or {}
             result["overlay_image"] = render_side_overlay(
-                image.copy(),
+                working_image.copy(),
                 points_map,
                 overlay_jaw_contour,
                 gonial_debug=gonial_debug,
@@ -292,10 +294,10 @@ class ThreeDDFAEngine:
         landmarks["overlay_source"] = overlay_source
 
         contours = trace_side_contours(
-            image=image,
+            image=working_image,
             anchor_points=(result.get("landmarks_v2") or {}).get("points") or points,
             jaw_solver_debug=jaw.debug if isinstance(jaw.debug, dict) else {},
-            was_mirrored=bool((result.get("measurements") or {}).get("was_mirrored", False)),
+            was_mirrored=was_mirrored,
         )
         landmarks["contours"] = contours
         result["contours"] = contours

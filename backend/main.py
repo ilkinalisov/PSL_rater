@@ -301,6 +301,8 @@ def _extract_anchor_points_from_debug(side_debug: Dict) -> Dict:
 
 def _build_legacy_contours(image: np.ndarray, side_debug: Dict, measurements) -> Dict:
     anchors = _extract_anchor_points_from_debug(side_debug or {})
+    was_mirrored = bool(getattr(measurements, "was_mirrored", False))
+    working_image = cv2.flip(image, 1) if was_mirrored else image
     if not anchors:
         return {
             "method": "landmark_fallback_v1",
@@ -308,18 +310,18 @@ def _build_legacy_contours(image: np.ndarray, side_debug: Dict, measurements) ->
             "silhouette": [],
             "jaw_ramus": [],
             "debug": {
-                "image_size": {"width": int(image.shape[1]), "height": int(image.shape[0])},
-                "was_mirrored": bool(getattr(measurements, "was_mirrored", False)),
+                "image_size": {"width": int(working_image.shape[1]), "height": int(working_image.shape[0])},
+                "was_mirrored": was_mirrored,
                 "processing_mode": "color",
                 "roi": None,
                 "fallback_reason": "missing_anchors",
             },
         }
     return trace_side_contours(
-        image=image,
+        image=working_image,
         anchor_points=anchors,
         jaw_solver_debug=(side_debug or {}).get("v2_diagnostics", {}).get("jawline_solver", {}),
-        was_mirrored=bool(getattr(measurements, "was_mirrored", False)),
+        was_mirrored=was_mirrored,
     )
 
 

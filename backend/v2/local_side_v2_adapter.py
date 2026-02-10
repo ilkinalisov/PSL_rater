@@ -109,6 +109,8 @@ class LocalSideV2Adapter:
 
         m = _as_plain_dict(measurements)
         debug = debug or {}
+        was_mirrored = bool(m.get("was_mirrored", False))
+        working_image = cv2.flip(image, 1) if was_mirrored else image
 
         points = {}
         point_map = debug.get("landmark_points", {})
@@ -157,7 +159,7 @@ class LocalSideV2Adapter:
             "acceptance_gate": {},
         }
 
-        jawline_result = solve_jawline_contour(image, points)
+        jawline_result = solve_jawline_contour(working_image, points)
         jawline_visibility = float(np.clip(jawline_result.visibility_score, 0.0, 1.0))
         pitch_deg = _safe_float((jawline_result.debug or {}).get("pitch_deg"), _pose_pitch(points), -30.0, 30.0)
         processing_mode = str((jawline_result.debug or {}).get("processing_mode", "color"))
@@ -270,7 +272,7 @@ class LocalSideV2Adapter:
         jaw_curvature = contour_curvature_score(jaw_contour)
         quality = {
             "pose_yaw": round(_pose_yaw(points), 2),
-            "lighting_score": round(_lighting_score(image), 3),
+            "lighting_score": round(_lighting_score(working_image), 3),
             "occlusion_score": round(float(np.clip(1.0 - ((0.75 * missing_ratio) + (0.25 * (1.0 - gonion_conf))), 0.0, 1.0)), 3),
             "jawline_visibility_score": round(jawline_visibility, 3),
             "monochrome_score": round(monochrome_score, 3),
@@ -418,7 +420,7 @@ class LocalSideV2Adapter:
             overlay_jaw_contour = safe_contour if len(safe_contour) >= 2 else build_default_jaw_contour(points)
         try:
             overlay_image = render_side_overlay(
-                image.copy(),
+                working_image.copy(),
                 points,
                 overlay_jaw_contour,
                 gonial_debug=gonial_debug,
@@ -433,10 +435,10 @@ class LocalSideV2Adapter:
             gonial_debug.setdefault("ramus_display_mode", "straight_fallback")
 
         contours = trace_side_contours(
-            image=image,
+            image=working_image,
             anchor_points=points,
             jaw_solver_debug=jawline_result.debug if jawline_result is not None else None,
-            was_mirrored=bool(m.get("was_mirrored", False)),
+            was_mirrored=was_mirrored,
         )
 
         return {

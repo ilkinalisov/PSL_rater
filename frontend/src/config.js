@@ -1,13 +1,28 @@
 // PART C3: Centralized API URL + API key configuration for all requests.
-const envApiUrl = process.env.REACT_APP_API_URL || process.env.VITE_API_URL;
-const envApiKey = process.env.REACT_APP_API_KEY || process.env.VITE_API_KEY || '';
-const envUseV2 = process.env.REACT_APP_USE_V2_API || process.env.VITE_USE_V2_API || '';
-const envBuild =
-  process.env.REACT_APP_BUILD_ID ||
-  process.env.VITE_BUILD_ID ||
-  process.env.REACT_APP_VERCEL_GIT_COMMIT_SHA ||
-  process.env.VITE_VERCEL_GIT_COMMIT_SHA ||
-  '';
+const procEnv = (typeof process !== 'undefined' && process && process.env) ? process.env : {};
+const viteEnv = (typeof import.meta !== 'undefined' && import.meta && import.meta.env) ? import.meta.env : {};
+
+const pickEnv = (...keys) => {
+  for (const key of keys) {
+    const v = viteEnv[key];
+    if (typeof v === 'string' && v.trim()) return v;
+  }
+  for (const key of keys) {
+    const v = procEnv[key];
+    if (typeof v === 'string' && v.trim()) return v;
+  }
+  return '';
+};
+
+const envApiUrl = pickEnv('VITE_API_URL', 'REACT_APP_API_URL');
+const envApiKey = pickEnv('VITE_API_KEY', 'REACT_APP_API_KEY');
+const envUseV2 = pickEnv('VITE_USE_V2_API', 'REACT_APP_USE_V2_API');
+const envBuild = pickEnv(
+  'VITE_BUILD_ID',
+  'REACT_APP_BUILD_ID',
+  'VITE_VERCEL_GIT_COMMIT_SHA',
+  'REACT_APP_VERCEL_GIT_COMMIT_SHA',
+);
 
 const truthyValues = ['1', 'true', 'yes', 'on'];
 

@@ -867,6 +867,53 @@ class SideProfileAnalyzer:
 
         return 'left' if nose_x < w / 2 else 'right'
 
+    def _extract_side_landmark_coords(self, landmarks, w: int, h: int):
+        """Extract configured landmark coordinates and confidence estimates."""
+        coords = {}
+        confidences = {}
+        for name, idx in self.SIDE_LANDMARKS.items():
+            try:
+                lm = landmarks.landmark[idx]
+                confidence = 1.0 - abs(lm.z)
+                coords[name] = (int(lm.x * w), int(lm.y * h))
+                confidences[name] = confidence
+            except Exception:
+                continue
+        return coords, confidences
+
+    def _is_left_facing_geometry(self, coords: Dict) -> bool:
+        """Geometry vote for normalized left-facing profile expectation."""
+        left_votes = 0
+        right_votes = 0
+
+        pronasale = coords.get("pronasale")
+        subnasale = coords.get("subnasale")
+        tragion = coords.get("tragion")
+        menton = coords.get("menton")
+        gonion = coords.get("gonion")
+
+        if pronasale is not None and tragion is not None:
+            if pronasale[0] < tragion[0]:
+                left_votes += 1
+            else:
+                right_votes += 1
+
+        if subnasale is not None and tragion is not None:
+            if subnasale[0] < tragion[0]:
+                left_votes += 1
+            else:
+                right_votes += 1
+
+        if menton is not None and gonion is not None:
+            if gonion[0] >= menton[0]:
+                left_votes += 1
+            else:
+                right_votes += 1
+
+        if (left_votes + right_votes) == 0:
+            return True
+        return left_votes >= right_votes
+
     def analyze_side_profile(self, image: np.ndarray):
         """Analyze with auto-mirroring"""
         if image is None:
@@ -914,19 +961,10 @@ class SideProfileAnalyzer:
         h, w = image.shape[:2]
 
         # Get landmarks with confidence tracking
-        coords = {}
-        confidences = {}
-        for name, idx in self.SIDE_LANDMARKS.items():
-            try:
-                lm = landmarks.landmark[idx]
-                confidence = 1.0 - abs(lm.z)
-                coords[name] = (int(lm.x * w), int(lm.y * h))
-                confidences[name] = confidence
-
-                if confidence < self.MIN_CONFIDENCE:
-                    print(f"[Landmark] Low confidence for {name}: {confidence:.2f}")
-            except:
-                pass
+        coords, confidences = self._extract_side_landmark_coords(landmarks, w, h)
+        for name, confidence in confidences.items():
+            if confidence < self.MIN_CONFIDENCE:
+                print(f"[Landmark] Low confidence for {name}: {confidence:.2f}")
 
         # Find true menton (lowest chin point)
         menton = self._find_menton(landmarks, w, h)
@@ -937,6 +975,45 @@ class SideProfileAnalyzer:
         tragion = self._select_posterior_tragion(coords, landmarks, w, h)
         if tragion:
             coords["tragion"] = tragion
+
+        # Protocol guard: enforce normalized left-facing geometry before hybrid tracing.
+        if not self._is_left_facing_geometry(coords):
+            forced_image = cv2.flip(image, 1)
+            forced_landmarks, forced_debug = self._detect_face_landmarks_with_retries(forced_image)
+            if forced_landmarks is None:
+                crop_landmarks, crop_debug = self._detect_face_landmarks_with_crop_fallback(forced_image)
+                if crop_landmarks is not None:
+                    forced_landmarks = crop_landmarks
+                    forced_debug = crop_debug
+            if forced_landmarks is not None:
+                image = forced_image
+                landmarks = forced_landmarks
+                was_mirrored = not was_mirrored
+                coords, confidences = self._extract_side_landmark_coords(landmarks, w, h)
+                menton = self._find_menton(landmarks, w, h)
+                if menton:
+                    coords["menton"] = menton
+                tragion = self._select_posterior_tragion(coords, landmarks, w, h)
+                if tragion:
+                    coords["tragion"] = tragion
+                detection_debug = {
+                    "detector_step": forced_debug.get("detector_step"),
+                    "detector_confidence": forced_debug.get("detector_confidence"),
+                    "attempts": detection_debug.get("attempts", []) + ["forced_left_reorientation"] + forced_debug.get("attempts", []),
+                }
+            else:
+                # Preserve protocol even if re-detection fails by flipping known anchors.
+                image = forced_image
+                was_mirrored = not was_mirrored
+                flipped_coords = {}
+                for key, pt in coords.items():
+                    flipped_coords[key] = (int((w - 1) - pt[0]), int(pt[1]))
+                coords = flipped_coords
+                detection_debug = {
+                    "detector_step": detection_debug.get("detector_step"),
+                    "detector_confidence": detection_debug.get("detector_confidence"),
+                    "attempts": detection_debug.get("attempts", []) + ["forced_left_reorientation_geom_only"],
+                }
 
         # HYBRID EDGE DETECTION
         gonion, gonial_angle_hybrid, gonion_conf, detection_method, hybrid_debug = self._estimate_gonion_hybrid(
