@@ -29,7 +29,7 @@
     "typescript": "^4.9.5"
   },
   "engines": {
-    "node": "20.x"
+    "node": "24.x"
   },
   "proxy": "http://localhost:8000",
   "browserslist": {
