@@ -1,0 +1,4 @@
+# Requirements for test_all_faces.py automation script
+# Install: pip install -r test_requirements.txt
+
+requests>=2.31.0

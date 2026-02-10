@@ -1,0 +1,85 @@
+
+# ============================================================================
+
+# .gitignore for PSL Analyzer - Optimized for Render Deployment
+
+# ============================================================================
+
+# ENVIRONMENT & SECRETS (use Render environment variables instead)
+
+.env
+
+.env.local
+
+.env.*.local
+
+# PYTHON - Virtual environments (Render builds from requirements.txt)
+
+venv/
+
+env/
+
+ENV/
+
+backend/venv/
+
+__pycache__/
+
+*.py[cod]
+
+*.egg-info/
+
+.pytest_cache/
+
+# NODE/FRONTEND - Dependencies (Render runs npm install)
+
+node_modules/
+
+frontend/node_modules/
+
+frontend/build/
+
+frontend/dist/
+
+npm-debug.log*
+
+# OPERATING SYSTEM
+
+.DS_Store
+
+Thumbs.db
+
+*.swp
+
+# IDE
+
+.vscode/
+
+.idea/
+
+# LOGS & PROCESS FILES
+
+logs/
+
+*.log
+
+*.pid
+
+.ngrok_url
+
+# USER DATA (keep private)
+
+Face_samples/
+
+test_results/
+
+# SSL PRIVATE KEYS (NEVER commit these)
+
+ssl/*.key
+
+ssl/*.pem
+
+*.key
+
+*.pem
+

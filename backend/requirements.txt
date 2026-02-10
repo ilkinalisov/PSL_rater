@@ -1,0 +1,12 @@
+fastapi==0.104.1
+uvicorn==0.24.0
+opencv-python-headless==4.8.1.78
+mediapipe==0.10.7
+numpy==1.25.2
+scipy==1.11.3
+pandas==2.1.0
+Pillow==10.1.0
+python-dotenv==1.0.0
+python-multipart==0.0.6
+slowapi==0.1.9
+requests==2.32.3

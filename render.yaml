@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: psl-analyzer-api
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: FRONTEND_URL
+        value: https://ps-lrater-6mrb.vercel.app
+      - key: SIDE_INFERENCE_URL
+        value: https://psl-side-inference.onrender.com
+      - key: V2_SIDE_TIMEOUT_SECONDS
+        value: "3.2"
+      - key: V2_CB_FAILURE_THRESHOLD
+        value: "3"
+      - key: V2_CB_RECOVERY_SECONDS
+        value: "20"
+      - key: ENABLE_V2_SHADOW
+        value: "false"
