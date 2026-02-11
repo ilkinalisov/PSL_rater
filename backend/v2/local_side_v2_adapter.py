@@ -383,7 +383,9 @@ class LocalSideV2Adapter:
         m["raw_gonial_angle"] = gonial_debug.get("raw_angle")
         m["pre_validation_gonial_angle"] = gonial_debug.get("pre_validation_angle")
         m["gonial_angle"] = _safe_float(m.get("gonial_angle"), 120.0, 95.0, 150.0)
-        m["profile_harmony_score"] = _safe_float(m.get("profile_harmony_score"), 5.0, 0.0, 10.0)
+        # Keep compatibility with both scales:
+        # legacy paths may emit 0..10, while analyzer computes 0..100.
+        m["profile_harmony_score"] = _safe_float(m.get("profile_harmony_score"), 50.0, 0.0, 100.0)
         m["forward_growth_score"] = _safe_float(m.get("forward_growth_score"), 5.0, 0.0, 10.0)
 
         # Keep scoring aligned with finalized landmark/angle outputs.

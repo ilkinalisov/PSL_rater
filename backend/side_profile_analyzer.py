@@ -1579,6 +1579,7 @@ class SideProfileAnalyzer:
     def calculate_side_profile_score(self, measurements: SideProfileMeasurements) -> Tuple[float, Dict]:
         """Calculate PSL score using continuous Gaussian curves"""
         scores = {}
+        effective_weights = {}
 
         def _safe_val(value: float, default: float, low: float = 0.0, high: float = 10.0) -> float:
             try:
@@ -1589,10 +1590,41 @@ class SideProfileAnalyzer:
                 out = float(default)
             return float(np.clip(out, low, high))
 
+        def _normalize_profile_harmony(raw_value: float) -> float:
+            """
+            Normalize profile harmony to a stable 0..10 scale.
+            Accepts both legacy 0..10 and current 0..100 representations.
+            """
+            raw = _safe_val(raw_value, 50.0, 0.0, 100.0)
+            if raw <= 10.0:
+                return float(raw)
+            return float(np.clip(raw / 10.0, 0.0, 10.0))
+
+        def _gonial_reliability(m: SideProfileMeasurements) -> float:
+            """
+            Reliability score in [0.35, 1.0] to avoid single-point scoring collapse
+            when gonial geometry is estimated/fallback-heavy.
+            """
+            conf = _safe_val(getattr(m, "gonion_confidence", 0.5), 0.5, 0.0, 1.0)
+            source = str(getattr(m, "gonial_source", "default") or "default").strip().lower()
+            fallback_reason = str(getattr(m, "gonial_fallback_reason", "default") or "default").strip().lower()
+            is_estimated = bool(getattr(m, "is_estimated", False))
+
+            rel = 1.0
+            if fallback_reason not in ("none", "default", ""):
+                rel -= 0.24
+            if source in ("default", "shape_fallback", "contour_tangent_fallback"):
+                rel -= 0.12
+            if is_estimated:
+                rel -= 0.16
+
+            rel *= (0.55 + (0.45 * conf))
+            return float(np.clip(rel, 0.35, 1.0))
+
         gonial_angle = _safe_val(getattr(measurements, "gonial_angle", 120.0), 120.0, 95.0, 150.0)
         nasolabial_angle = _safe_val(getattr(measurements, "nasolabial_angle", 100.0), 100.0, 70.0, 130.0)
         facial_convexity_angle = _safe_val(getattr(measurements, "facial_convexity_angle", 165.0), 165.0, 135.0, 180.0)
-        profile_harmony = _safe_val(getattr(measurements, "profile_harmony_score", 5.0), 5.0, 0.0, 10.0)
+        profile_harmony = _normalize_profile_harmony(getattr(measurements, "profile_harmony_score", 50.0))
         forward_growth = _safe_val(getattr(measurements, "forward_growth_score", 5.0), 5.0, 0.0, 10.0)
 
         balance = getattr(measurements, "vertical_profile_balance", {}) or {}
@@ -1614,9 +1646,15 @@ class SideProfileAnalyzer:
             gonial_std = 12.0
 
         # FIX 1: Soft floor 2.0 with wider tolerance.
-        scores["gonial_angle"] = max(2.0, self._gaussian_score(
+        gonial_base = max(2.0, self._gaussian_score(
             gonial_angle, ideal=gonial_ideal, std_dev=gonial_std
         ))
+        gonial_rel = _gonial_reliability(measurements)
+        # Blend uncertain gonial reads toward a neutral middle value.
+        # This preserves penalties for reliable bad geometry while preventing score collapse.
+        scores["gonial_angle"] = float(
+            np.clip((gonial_base * gonial_rel) + (5.6 * (1.0 - gonial_rel)), 2.0, 10.0)
+        )
 
         # Nasolabial angle
         # PART A3 / FIX 1: Wider std_dev and soft floor.
@@ -1637,7 +1675,7 @@ class SideProfileAnalyzer:
         scores["vertical_balance"] = max(2.0, 10.0 * math.exp(-(balance_dev**2) / 0.08))
 
         # Profile harmony
-        scores["profile_harmony"] = max(2.0, min(10.0, profile_harmony / 9.6))
+        scores["profile_harmony"] = max(2.0, min(10.0, profile_harmony))
 
         # Forward growth
         scores["forward_growth"] = forward_growth
@@ -1671,7 +1709,21 @@ class SideProfileAnalyzer:
                 "vertical_balance": 0.05
             }
 
-        weighted = sum(scores[k] * WEIGHTS[k] for k in WEIGHTS.keys())
+        # Confidence-aware weighting: reduce gonial dominance if geometry reliability is weak
+        # and redistribute that mass to other components.
+        effective_weights = dict(WEIGHTS)
+        gonial_base_w = float(WEIGHTS.get("gonial_angle", 0.0))
+        gonial_scale = 0.60 + (0.40 * gonial_rel)
+        effective_weights["gonial_angle"] = gonial_base_w * gonial_scale
+        redistributed = gonial_base_w - effective_weights["gonial_angle"]
+        if redistributed > 1e-6:
+            other_keys = [k for k in WEIGHTS.keys() if k != "gonial_angle"]
+            other_sum = float(sum(WEIGHTS[k] for k in other_keys))
+            if other_sum > 1e-8:
+                for key in other_keys:
+                    effective_weights[key] += redistributed * (WEIGHTS[key] / other_sum)
+
+        weighted = sum(scores[k] * effective_weights[k] for k in effective_weights.keys())
         if not np.isfinite(weighted):
             weighted = 5.0
 
