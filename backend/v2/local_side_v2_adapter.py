@@ -367,6 +367,16 @@ class LocalSideV2Adapter:
             "subnasale": list(points.get("subnasale", (0, 0))),
             "pogonion": list(points.get("pogonion", points.get("menton", (0, 0)))),
         }
+        for key in (
+            "glabella",
+            "trichion",
+            "pronasale",
+            "tragion",
+            "labrale_superius",
+            "labrale_inferius",
+        ):
+            if key in points:
+                required_points[key] = list(points[key])
 
         m["gonial_source"] = str(gonial_debug.get("source", m.get("gonial_source", "default")))
         m["gonial_fallback_reason"] = str(gonial_debug.get("fallback_reason", m.get("gonial_fallback_reason", "default")))
@@ -406,7 +416,18 @@ class LocalSideV2Adapter:
         method_source = "local_fallback_legacy"
         overlay_source = "v2_landmarks_renderer"
         overlay_image = overlay
-        overlay_jaw_contour = jaw_contour
+        contours = trace_side_contours(
+            image=working_image,
+            anchor_points=points,
+            jaw_solver_debug=jawline_result.debug if jawline_result is not None else None,
+            was_mirrored=was_mirrored,
+        )
+        traced_jaw_contour = []
+        if isinstance(contours, dict):
+            candidate = contours.get("jaw_ramus") or []
+            if isinstance(candidate, list) and len(candidate) >= 2:
+                traced_jaw_contour = candidate
+        overlay_jaw_contour = traced_jaw_contour if traced_jaw_contour else jaw_contour
         safe_overlay_mode = (
             (not jawline_accepted) or
             bool(gonial_debug.get("fallback_reason") not in (None, "none")) or
@@ -433,13 +454,6 @@ class LocalSideV2Adapter:
             gonial_debug.setdefault("overlay_snap_mode", "off")
             gonial_debug.setdefault("overlay_path_quality", 0.0)
             gonial_debug.setdefault("ramus_display_mode", "straight_fallback")
-
-        contours = trace_side_contours(
-            image=working_image,
-            anchor_points=points,
-            jaw_solver_debug=jawline_result.debug if jawline_result is not None else None,
-            was_mirrored=was_mirrored,
-        )
 
         return {
             "score": float(side_score),

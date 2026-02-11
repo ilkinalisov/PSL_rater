@@ -11,7 +11,8 @@ import numpy as np
 
 Point = Tuple[int, int]
 Polyline = List[Point]
-OVERLAY_RENDERER_VERSION = "v2_landmarks_renderer@3"
+RegressionModel = Tuple[str, float, float]
+OVERLAY_RENDERER_VERSION = "v2_landmarks_renderer@4"
 
 
 def _to_point(val: Sequence[float]) -> Point:
@@ -27,7 +28,7 @@ def _extract_points(points: Dict[str, Sequence[float]]) -> Dict[str, Point]:
     return out
 
 
-def _as_polyline(polyline: Iterable[Sequence[float]] | None) -> Polyline:
+def _as_polyline(polyline: Optional[Iterable[Sequence[float]]]) -> Polyline:
     pts: Polyline = []
     for pt in polyline or []:
         if pt is None or len(pt) < 2:
@@ -178,6 +179,167 @@ def _line_quality(polyline: Polyline, a: Point, b: Point) -> float:
     return float(np.clip((0.50 * residual_score) + (0.30 * shape_score) + (0.20 * curvature_score), 0.0, 1.0))
 
 
+def _fit_segment_polyfit(points: Polyline) -> Optional[RegressionModel]:
+    if len(points) < 2:
+        return None
+    arr = np.array(points, dtype=float)
+    x = arr[:, 0]
+    y = arr[:, 1]
+    var_x = float(np.var(x))
+    var_y = float(np.var(y))
+    try:
+        if var_x >= var_y:
+            if float(np.ptp(x)) < 1e-6:
+                return None
+            m, b = np.polyfit(x, y, deg=1)
+            return ("xy", float(m), float(b))
+        if float(np.ptp(y)) < 1e-6:
+            return None
+        m, b = np.polyfit(y, x, deg=1)
+        return ("yx", float(m), float(b))
+    except Exception:
+        return None
+
+
+def _segment_sse(points: Polyline, model: RegressionModel) -> float:
+    if len(points) < 2:
+        return 1e9
+    axis, m, b = model
+    arr = np.array(points, dtype=float)
+    x = arr[:, 0]
+    y = arr[:, 1]
+    if axis == "xy":
+        pred = (m * x) + b
+        resid = y - pred
+    else:
+        pred = (m * y) + b
+        resid = x - pred
+    return float(np.sum(resid * resid))
+
+
+def _model_to_implicit_line(model: RegressionModel) -> Tuple[float, float, float]:
+    axis, m, b = model
+    if axis == "xy":
+        return (float(m), -1.0, float(b))
+    return (1.0, float(-m), float(-b))
+
+
+def _intersect_lines(
+    l1: Tuple[float, float, float],
+    l2: Tuple[float, float, float],
+) -> Optional[Tuple[float, float]]:
+    a1, b1, c1 = l1
+    a2, b2, c2 = l2
+    det = (a1 * b2) - (a2 * b1)
+    if abs(det) < 1e-6:
+        return None
+    x = ((b1 * c2) - (b2 * c1)) / det
+    y = ((c1 * a2) - (c2 * a1)) / det
+    if not np.isfinite(x) or not np.isfinite(y):
+        return None
+    return (float(x), float(y))
+
+
+def _point_to_polyline_distance(point: Point, polyline: Polyline) -> float:
+    if len(polyline) < 2:
+        return 1e6
+    p = np.array(point, dtype=float)
+    best = 1e9
+    for i in range(len(polyline) - 1):
+        a = np.array(polyline[i], dtype=float)
+        b = np.array(polyline[i + 1], dtype=float)
+        best = min(best, _point_segment_distance(p, a, b))
+    return float(best)
+
+
+def _fit_piecewise_jawline_regression(
+    contour: Polyline,
+    menton: Point,
+    articulare: Point,
+) -> Dict[str, object]:
+    out: Dict[str, object] = {
+        "regression_ok": False,
+        "mandibular_path": [],
+        "ramus_path": [],
+        "gonion_intersection": None,
+        "split_idx": -1,
+        "sse_total": 0.0,
+    }
+    if len(contour) < 8:
+        return out
+
+    arr = np.array(contour, dtype=float)
+    min_x = float(np.min(arr[:, 0]))
+    max_x = float(np.max(arr[:, 0]))
+    min_y = float(np.min(arr[:, 1]))
+    max_y = float(np.max(arr[:, 1]))
+    diag = float(np.hypot(max_x - min_x, max_y - min_y))
+    max_anchor_dist = max(18.0, 0.22 * diag)
+
+    idx_me = _nearest_point_index(contour, menton, max_anchor_dist)
+    idx_ar = _nearest_point_index(contour, articulare, max_anchor_dist)
+    if idx_me is None or idx_ar is None:
+        return out
+
+    seg = _extract_poly_segment(contour, idx_me, idx_ar)
+    seg = _smooth_polyline(_densify_polyline(seg, step_px=2.2), window=5)
+    if len(seg) < 8:
+        return out
+
+    min_pts = 4
+    best = None
+    for split_idx in range(min_pts - 1, len(seg) - min_pts):
+        left = seg[: split_idx + 1]
+        right = seg[split_idx:]
+        if len(left) < min_pts or len(right) < min_pts:
+            continue
+        left_model = _fit_segment_polyfit(left)
+        right_model = _fit_segment_polyfit(right)
+        if left_model is None or right_model is None:
+            continue
+        sse_total = _segment_sse(left, left_model) + _segment_sse(right, right_model)
+        if best is None or sse_total < best["sse_total"]:
+            best = {
+                "split_idx": split_idx,
+                "left_model": left_model,
+                "right_model": right_model,
+                "sse_total": float(sse_total),
+            }
+
+    if best is None:
+        return out
+
+    intersection = _intersect_lines(
+        _model_to_implicit_line(best["left_model"]),
+        _model_to_implicit_line(best["right_model"]),
+    )
+    if intersection is None:
+        return out
+    inter_pt = (int(round(intersection[0])), int(round(intersection[1])))
+
+    margin = max(12.0, 0.10 * diag)
+    if not (min_x - margin <= inter_pt[0] <= max_x + margin and min_y - margin <= inter_pt[1] <= max_y + margin):
+        return out
+    if _point_to_polyline_distance(inter_pt, seg) > max(24.0, 0.18 * diag):
+        return out
+    if float(np.linalg.norm(np.array(inter_pt, dtype=float) - np.array(menton, dtype=float))) < 6.0:
+        return out
+    if float(np.linalg.norm(np.array(inter_pt, dtype=float) - np.array(articulare, dtype=float))) < 6.0:
+        return out
+
+    out.update(
+        {
+            "regression_ok": True,
+            "mandibular_path": [menton, inter_pt],
+            "ramus_path": [inter_pt, articulare],
+            "gonion_intersection": inter_pt,
+            "split_idx": int(best["split_idx"]),
+            "sse_total": float(best["sse_total"]),
+        }
+    )
+    return out
+
+
 def _build_overlay_edge_map(image: np.ndarray, mode: str) -> np.ndarray:
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     clahe = cv2.createCLAHE(clipLimit=2.8, tileGridSize=(8, 8))
@@ -276,10 +438,10 @@ def _draw_polyline(
     )
 
 
-def _build_gonial_overlay_paths(
+def _build_legacy_gonial_overlay_paths(
     points: Dict[str, Point],
-    jaw_contour: List[Sequence[float]] | None,
-    image_shape: Tuple[int, int, int] | Tuple[int, int],
+    jaw_contour: Optional[List[Sequence[float]]],
+    image_shape: Tuple[int, int, int],
     processing_mode: str = "color",
 ) -> Dict[str, object]:
     _ = processing_mode  # kept explicit for stable signature
@@ -290,6 +452,9 @@ def _build_gonial_overlay_paths(
             "overlay_geometry_source": "straight_fallback",
             "overlay_path_quality": 0.0,
             "ramus_display_mode": "straight_fallback",
+            "gonion_overlay_point": None,
+            "overlay_regression_split_idx": None,
+            "overlay_regression_sse": None,
         }
 
     h = int(image_shape[0])
@@ -396,13 +561,56 @@ def _build_gonial_overlay_paths(
         "overlay_geometry_source": source,
         "overlay_path_quality": round(path_quality, 3),
         "ramus_display_mode": ramus_display_mode,
+        "gonion_overlay_point": go,
+        "overlay_regression_split_idx": None,
+        "overlay_regression_sse": None,
     }
+
+
+def _build_gonial_overlay_paths(
+    points: Dict[str, Point],
+    jaw_contour: Optional[List[Sequence[float]]],
+    image_shape: Tuple[int, int, int],
+    processing_mode: str = "color",
+) -> Dict[str, object]:
+    if not all(k in points for k in ("articulare", "gonion", "menton")):
+        return _build_legacy_gonial_overlay_paths(points, jaw_contour, image_shape, processing_mode=processing_mode)
+
+    ar = points["articulare"]
+    me = points["menton"]
+    contour = _as_polyline(jaw_contour)
+    if len(contour) >= 8:
+        regression = _fit_piecewise_jawline_regression(contour, menton=me, articulare=ar)
+        if bool(regression.get("regression_ok")):
+            gonion_overlay = regression.get("gonion_intersection")
+            mandibular_path = list(regression.get("mandibular_path") or [])
+            ramus_path = list(regression.get("ramus_path") or [])
+            if (
+                isinstance(gonion_overlay, tuple) and
+                len(mandibular_path) >= 2 and
+                len(ramus_path) >= 2
+            ):
+                q_m = _line_quality(mandibular_path, me, gonion_overlay)
+                q_r = _line_quality(ramus_path, gonion_overlay, ar)
+                path_quality = float(np.clip((0.55 * q_m) + (0.45 * q_r), 0.0, 1.0))
+                return {
+                    "mandibular_path": mandibular_path,
+                    "ramus_path": ramus_path,
+                    "overlay_geometry_source": "piecewise_regression",
+                    "overlay_path_quality": round(path_quality, 3),
+                    "ramus_display_mode": "piecewise_regression",
+                    "gonion_overlay_point": gonion_overlay,
+                    "overlay_regression_split_idx": int(regression.get("split_idx", -1)),
+                    "overlay_regression_sse": round(float(regression.get("sse_total", 0.0)), 3),
+                }
+
+    return _build_legacy_gonial_overlay_paths(points, jaw_contour, image_shape, processing_mode=processing_mode)
 
 
 def build_gonial_overlay_paths(
     points: Dict[str, Sequence[float]],
-    jaw_contour: List[Sequence[float]] | None,
-    image_shape: Tuple[int, int, int] | Tuple[int, int],
+    jaw_contour: Optional[List[Sequence[float]]],
+    image_shape: Tuple[int, int, int],
     processing_mode: str = "color",
 ) -> Dict[str, object]:
     return _build_gonial_overlay_paths(
@@ -416,7 +624,7 @@ def build_gonial_overlay_paths(
 def draw_gonial_overlay(
     overlay: np.ndarray,
     points: Dict[str, Sequence[float]],
-    jaw_contour: List[Sequence[float]] | None = None,
+    jaw_contour: Optional[List[Sequence[float]]] = None,
     *,
     gonial_debug: Optional[Dict] = None,
     processing_mode: str = "color",
@@ -432,6 +640,8 @@ def draw_gonial_overlay(
             "overlay_snap_mode": "off",
             "overlay_path_quality": 0.0,
             "ramus_display_mode": "straight_fallback",
+            "overlay_regression_split_idx": None,
+            "overlay_regression_sse": None,
         }
         if isinstance(gonial_debug, dict):
             gonial_debug.update(meta)
@@ -441,11 +651,17 @@ def draw_gonial_overlay(
     go = pts["gonion"]
     me = pts["menton"]
     path_info = _build_gonial_overlay_paths(pts, jaw_contour, overlay.shape, processing_mode=processing_mode)
-    mandibular_path: Polyline = list(path_info["mandibular_path"]) if path_info.get("mandibular_path") else [me, go]
-    ramus_path: Polyline = list(path_info["ramus_path"]) if path_info.get("ramus_path") else [go, ar]
+    gonion_overlay = path_info.get("gonion_overlay_point")
+    if not isinstance(gonion_overlay, tuple):
+        gonion_overlay = go
+
+    mandibular_path: Polyline = list(path_info["mandibular_path"]) if path_info.get("mandibular_path") else [me, gonion_overlay]
+    ramus_path: Polyline = list(path_info["ramus_path"]) if path_info.get("ramus_path") else [gonion_overlay, ar]
     source = str(path_info.get("overlay_geometry_source", "straight_fallback"))
     path_quality = float(path_info.get("overlay_path_quality", 0.0))
     ramus_display_mode = str(path_info.get("ramus_display_mode", "straight_fallback"))
+    overlay_regression_split_idx = path_info.get("overlay_regression_split_idx")
+    overlay_regression_sse = path_info.get("overlay_regression_sse")
     ramus_ref_end = ar if ramus_display_mode != "hybrid_vertical" else ramus_path[-1]
 
     snap_mode = "off"
@@ -454,30 +670,30 @@ def draw_gonial_overlay(
         effective_mode = processing_mode if processing_mode in ("mono", "hybrid", "color") else "hybrid"
         edge_map = _build_overlay_edge_map(overlay, effective_mode)
         radius = 3 if effective_mode == "mono" else 2
-        snapped_m, used_m = _maybe_snap_path(mandibular_path, edge_map, radius, me, go)
-        snapped_r, used_r = _maybe_snap_path(ramus_path, edge_map, radius, go, ramus_ref_end)
+        snapped_m, used_m = _maybe_snap_path(mandibular_path, edge_map, radius, me, gonion_overlay)
+        snapped_r, used_r = _maybe_snap_path(ramus_path, edge_map, radius, gonion_overlay, ramus_ref_end)
         if used_m:
             mandibular_path = snapped_m
         if used_r:
             ramus_path = snapped_r
         if used_m or used_r:
             snap_mode = effective_mode
-            q_m = _line_quality(mandibular_path, me, go)
-            q_r = _line_quality(ramus_path, go, ramus_ref_end)
+            q_m = _line_quality(mandibular_path, me, gonion_overlay)
+            q_r = _line_quality(ramus_path, gonion_overlay, ramus_ref_end)
             path_quality = float(np.clip((0.55 * q_m) + (0.45 * q_r), 0.0, 1.0))
 
     if len(mandibular_path) < 2:
-        mandibular_path = [me, go]
+        mandibular_path = [me, gonion_overlay]
     if len(ramus_path) < 2:
-        ramus_path = [go, ar]
+        ramus_path = [gonion_overlay, ar]
     mandibular_path[0] = me
-    mandibular_path[-1] = go
-    ramus_path[0] = go
+    mandibular_path[-1] = gonion_overlay
+    ramus_path[0] = gonion_overlay
     if ramus_display_mode == "hybrid_vertical":
         end = ramus_path[-1]
         max_dx = max(4, int(min(overlay.shape[0], overlay.shape[1]) * 0.05))
-        x = int(np.clip(end[0], go[0] - max_dx, go[0] + max_dx))
-        y = int(min(end[1], go[1] - 8))
+        x = int(np.clip(end[0], gonion_overlay[0] - max_dx, gonion_overlay[0] + max_dx))
+        y = int(min(end[1], gonion_overlay[1] - 8))
         ramus_path[-1] = (x, y)
         ramus_ref_end = ramus_path[-1]
     elif ramus_display_mode == "contour":
@@ -490,7 +706,7 @@ def draw_gonial_overlay(
     _draw_polyline(overlay, mandibular_path, color, thickness=thickness)
     _draw_polyline(overlay, ramus_path, color, thickness=thickness)
 
-    vertex = np.array(go, dtype=float)
+    vertex = np.array(gonion_overlay, dtype=float)
     v1 = np.array(ar, dtype=float) - vertex
     v2 = np.array(me, dtype=float) - vertex
     n1 = float(np.linalg.norm(v1))
@@ -525,7 +741,7 @@ def draw_gonial_overlay(
         )
 
     pr = max(2, int(point_radius))
-    for p in (ar, go, me):
+    for p in (ar, gonion_overlay, me):
         cv2.circle(overlay, p, pr, color, -1, lineType=cv2.LINE_AA)
 
     meta = {
@@ -533,16 +749,60 @@ def draw_gonial_overlay(
         "overlay_snap_mode": snap_mode,
         "overlay_path_quality": round(float(path_quality), 3),
         "ramus_display_mode": ramus_display_mode,
+        "overlay_regression_split_idx": overlay_regression_split_idx,
+        "overlay_regression_sse": overlay_regression_sse,
     }
     if isinstance(gonial_debug, dict):
         gonial_debug.update(meta)
     return meta
 
 
+def _compute_naso_frontal_overlay(points: Dict[str, Point]) -> Optional[Dict[str, object]]:
+    if "nasion" not in points:
+        return None
+
+    nasion = points["nasion"]
+    forehead = None
+    forehead_source = None
+    for key in ("trichion", "glabella"):
+        if key in points:
+            forehead = points[key]
+            forehead_source = key
+            break
+    if forehead is None or forehead_source is None:
+        return None
+
+    nose_ref = None
+    nose_source = None
+    for key in ("pronasale", "subnasale"):
+        if key in points:
+            nose_ref = points[key]
+            nose_source = key
+            break
+    if nose_ref is None or nose_source is None:
+        return None
+
+    forehead_vec = np.array([float(forehead[0] - nasion[0]), float(forehead[1] - nasion[1])], dtype=float)
+    nose_vec = np.array([float(nose_ref[0] - nasion[0]), float(nose_ref[1] - nasion[1])], dtype=float)
+    nf = float(np.linalg.norm(forehead_vec))
+    nn = float(np.linalg.norm(nose_vec))
+    if nf < 1e-6 or nn < 1e-6:
+        return None
+
+    cosv = float(np.clip(np.dot(forehead_vec, nose_vec) / (nf * nn), -1.0, 1.0))
+    angle = float(np.degrees(np.arccos(cosv)))
+    return {
+        "nasion": nasion,
+        "forehead": forehead,
+        "angle": angle,
+        "source": f"{forehead_source}->{nose_source}",
+    }
+
+
 def render_side_overlay(
     image: np.ndarray,
     points: Dict[str, Sequence[float]],
-    jaw_contour: List[Sequence[float]] | None = None,
+    jaw_contour: Optional[List[Sequence[float]]] = None,
     *,
     gonial_debug: Optional[Dict] = None,
     processing_mode: Optional[str] = None,
@@ -581,6 +841,37 @@ def render_side_overlay(
     profile_pts = [pts[k] for k in profile_keys if k in pts]
     if len(profile_pts) >= 2:
         _draw_polyline(overlay, profile_pts, (0, 255, 0), thickness=2)
+
+    nf_overlay = _compute_naso_frontal_overlay(pts)
+    if nf_overlay is not None:
+        nasion = nf_overlay["nasion"]
+        forehead = nf_overlay["forehead"]
+        angle = float(nf_overlay["angle"])
+        _draw_polyline(overlay, [nasion, forehead], (0, 255, 0), thickness=2)
+
+        tx = int(np.clip(nasion[0] - 44, 4, max(4, overlay.shape[1] - 92)))
+        ty = int(np.clip(nasion[1] - 12, 16, max(16, overlay.shape[0] - 4)))
+        cv2.putText(
+            overlay,
+            f"NF:{angle:.1f}deg",
+            (tx, ty),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.42,
+            (0, 255, 0),
+            1,
+            lineType=cv2.LINE_AA,
+        )
+        if isinstance(gonial_debug, dict):
+            gonial_debug["naso_frontal_angle"] = round(angle, 3)
+            gonial_debug["naso_frontal_source"] = str(nf_overlay.get("source", "unknown"))
+            gonial_debug["naso_frontal_segment"] = {
+                "nasion": [int(nasion[0]), int(nasion[1])],
+                "forehead": [int(forehead[0]), int(forehead[1])],
+            }
+    elif isinstance(gonial_debug, dict):
+        gonial_debug.pop("naso_frontal_angle", None)
+        gonial_debug.pop("naso_frontal_source", None)
+        gonial_debug.pop("naso_frontal_segment", None)
 
     mode = str(processing_mode or (gonial_debug or {}).get("processing_mode", "color"))
     mono = float(monochrome_score if monochrome_score is not None else (gonial_debug or {}).get("monochrome_score", 0.0))

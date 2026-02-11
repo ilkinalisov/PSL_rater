@@ -20,6 +20,15 @@ This package contains the V2 redesign building blocks:
 - `side_analysis.landmarks_v2.gonial_debug`
 - `side_analysis.quality_v2.jawline_visibility_score`
 
+## Overlay geometry notes
+
+- Blue gonial overlay now prefers `piecewise_regression` geometry fitted from traced
+  `contours.jaw_ramus` (chin-to-ear region) and falls back to legacy hybrid/straight
+  paths when regression quality checks fail.
+- Green profile overlay includes an added nasion-to-forehead segment, with
+  `gonial_debug.naso_frontal_angle`, `gonial_debug.naso_frontal_source`, and
+  `gonial_debug.naso_frontal_segment` populated when required landmarks are available.
+
 ## Calibration workflow
 
 1. Export CVAT annotations.

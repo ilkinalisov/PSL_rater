@@ -145,9 +145,8 @@ class TestV2OverlayRenderer(unittest.TestCase):
         ]
         info = build_gonial_overlay_paths(points, contour, (200, 200, 3), processing_mode="color")
         mandibular = info["mandibular_path"]
-        self.assertGreaterEqual(len(mandibular), 4)
-        self.assertNotEqual(mandibular[0][1], mandibular[len(mandibular) // 2][1])
-        self.assertIn(info["overlay_geometry_source"], {"contour", "hybrid"})
+        self.assertGreaterEqual(len(mandibular), 2)
+        self.assertIn(info["overlay_geometry_source"], {"piecewise_regression", "contour", "hybrid"})
 
     def test_hybrid_ramus_is_generated_when_contour_is_partial(self):
         points = {
@@ -189,6 +188,72 @@ class TestV2OverlayRenderer(unittest.TestCase):
         self.assertEqual(gonial_debug.get("overlay_geometry_source"), "straight_fallback")
         self.assertEqual(gonial_debug.get("ramus_display_mode"), "straight_fallback")
         self.assertEqual(gonial_debug.get("overlay_snap_mode"), "off")
+
+    def test_piecewise_regression_selected_for_clean_two_segment_contour(self):
+        points = {
+            "articulare": (140, 70),
+            "gonion": (104, 118),
+            "menton": (64, 142),
+        }
+        contour = [
+            [64, 142], [72, 138], [80, 134], [88, 130], [96, 124],
+            [104, 118], [110, 110], [116, 100], [124, 90], [132, 80], [140, 70],
+        ]
+        info = build_gonial_overlay_paths(points, contour, (220, 220, 3), processing_mode="color")
+        self.assertEqual(info.get("overlay_geometry_source"), "piecewise_regression")
+        self.assertEqual(info.get("ramus_display_mode"), "piecewise_regression")
+        self.assertIsNotNone(info.get("overlay_regression_split_idx"))
+        self.assertIsNotNone(info.get("overlay_regression_sse"))
+
+    def test_naso_frontal_metadata_is_added_when_landmarks_exist(self):
+        image = np.zeros((180, 180, 3), dtype=np.uint8)
+        points = {
+            "trichion": (64, 26),
+            "nasion": (58, 56),
+            "pronasale": (50, 84),
+            "subnasale": (58, 96),
+            "menton": (78, 146),
+            "gonion": (108, 118),
+            "articulare": (120, 78),
+        }
+        gonial_debug = {"processing_mode": "color", "monochrome_score": 0.0}
+        out = render_side_overlay(image.copy(), points, [[78, 146], [96, 132], [108, 118]], gonial_debug=gonial_debug)
+        self.assertEqual(out.shape, image.shape)
+        self.assertIn("naso_frontal_angle", gonial_debug)
+        self.assertIn("naso_frontal_source", gonial_debug)
+        self.assertIn("naso_frontal_segment", gonial_debug)
+        self.assertGreater(float(gonial_debug["naso_frontal_angle"]), 0.0)
+
+    def test_local_adapter_prefers_traced_jaw_ramus_for_overlay(self):
+        image = np.zeros((200, 200, 3), dtype=np.uint8)
+        adapter = LocalSideV2Adapter(_FakeSideAnalyzer())
+
+        jaw_result = JawlineSolveResult(
+            points={
+                "articulare": (118, 76),
+                "gonion": (106, 118),
+                "menton": (72, 144),
+            },
+            jaw_contour=[[72, 144], [90, 132], [106, 118], [114, 96]],
+            visibility_score=0.74,
+            source="jawline_contour",
+            fallback_reason="none",
+            debug={
+                "pitch_deg": 1.0,
+                "processing_mode": "color",
+                "monochrome_score": 0.15,
+                "fit_residual": 6.5,
+            },
+        )
+        traced = {"jaw_ramus": [[72, 144], [88, 132], [106, 118], [118, 76]]}
+
+        with patch("backend.v2.local_side_v2_adapter.solve_jawline_contour", return_value=jaw_result):
+            with patch("backend.v2.local_side_v2_adapter.trace_side_contours", return_value=traced):
+                with patch("backend.v2.local_side_v2_adapter.render_side_overlay", return_value=np.zeros_like(image)) as mocked_render:
+                    adapter.analyze(image)
+
+        passed_contour = mocked_render.call_args[0][2]
+        self.assertEqual(passed_contour, traced["jaw_ramus"])
 
 
 if __name__ == "__main__":

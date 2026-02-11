@@ -259,9 +259,23 @@ class ThreeDDFAEngine:
             landmarks["method_source"] = "local_fallback_legacy"
             result["method_source"] = "local_fallback_legacy"
 
+        contours = trace_side_contours(
+            image=working_image,
+            anchor_points=(result.get("landmarks_v2") or {}).get("points") or points,
+            jaw_solver_debug=jaw.debug if isinstance(jaw.debug, dict) else {},
+            was_mirrored=was_mirrored,
+        )
+        landmarks["contours"] = contours
+        result["contours"] = contours
+
         # Ensure overlay matches finalized landmarks (post-fusion points).
         overlay_source = "v2_landmarks_renderer"
-        overlay_jaw_contour = (result.get("landmarks_v2") or {}).get("jaw_contour") or []
+        traced_jaw_contour = []
+        if isinstance(contours, dict):
+            candidate = contours.get("jaw_ramus") or []
+            if isinstance(candidate, list) and len(candidate) >= 2:
+                traced_jaw_contour = candidate
+        overlay_jaw_contour = traced_jaw_contour or ((result.get("landmarks_v2") or {}).get("jaw_contour") or [])
         safe_overlay_mode = (
             (not accepted) or
             bool(gonial_debug.get("fallback_reason") not in (None, "none")) or
@@ -292,15 +306,6 @@ class ThreeDDFAEngine:
             gonial_debug.setdefault("overlay_path_quality", 0.0)
             gonial_debug.setdefault("ramus_display_mode", "straight_fallback")
         landmarks["overlay_source"] = overlay_source
-
-        contours = trace_side_contours(
-            image=working_image,
-            anchor_points=(result.get("landmarks_v2") or {}).get("points") or points,
-            jaw_solver_debug=jaw.debug if isinstance(jaw.debug, dict) else {},
-            was_mirrored=was_mirrored,
-        )
-        landmarks["contours"] = contours
-        result["contours"] = contours
 
         result.setdefault("debug", {})
         result["debug"]["remote_engine"] = {
